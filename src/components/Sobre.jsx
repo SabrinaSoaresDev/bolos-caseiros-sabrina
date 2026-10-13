@@ -1,9 +1,10 @@
+import bolo from "../assets/bolo.jpg";
 export default function Sobre() {
   return (
     <section id="sobre" className="py-16 md:py-24 px-4 bg-creme">
       <div className="max-w-7xl mx-auto grid md:grid-cols-2 gap-10 items-center">
         <img
-          src="https://images.unsplash.com/photo-1556910103-1c02745aae4d?w=800"
+          src={bolo}
           alt="Confeiteira"
           className="rounded-3xl shadow-xl w-full"
         />

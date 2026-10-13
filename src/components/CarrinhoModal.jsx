@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   FiX, FiTrash2, FiMinus, FiPlus, FiUser, FiPhone,
   FiMapPin, FiShoppingBag, FiTruck, FiArrowLeft, FiCheck,
@@ -8,32 +8,103 @@ import { addDoc, collection, serverTimestamp } from "firebase/firestore";
 import { db } from "../firebase/config";
 import { useCarrinho } from "../context/CarrinhoContext";
 
+// ============ TABELAS FORA DO COMPONENTE ============
+
+// 🛵 Taxas de entrega por bairro (base: Nossa Senhora da Conceição)
+const TAXAS_ENTREGA = {
+  // 🟢 ZONA 1 — Muito próximo
+  "Nossa Senhora da Conceição": 3.00,
+  "Colina": 5.00,
+  "BNH": 5.00,
+  "Novo Horizonte": 5.00,
+
+  // 🟡 ZONA 2 — Próximo
+  "Centro": 7.00,
+  "Araçá": 8.00,
+  "Movelar": 8.00,
+
+  // 🟠 ZONA 3 — Médio
+  "Aviso": 10.00,
+  "Três Barras": 12.00,
+  "Shell": 12.00,
+
+  // 🔴 ZONA 4 — Distante
+  "Interlagos": 15.00,
+  "Jardim Laguna": 18.00,
+};
+
+const TAXA_PADRAO = 25.00;
+
+// 🕐 Horários disponíveis
+const HORARIOS = [
+  // 🌤️ MANHÃ
+  { valor: "11:00", grupo: "Manhã" },
+  { valor: "11:30", grupo: "Manhã" },
+  { valor: "12:00", grupo: "Manhã" },
+  // 🌇 TARDE
+  { valor: "16:30", grupo: "Tarde" },
+  { valor: "17:00", grupo: "Tarde" },
+  { valor: "17:30", grupo: "Tarde" },
+  { valor: "18:00", grupo: "Tarde" },
+  { valor: "18:30", grupo: "Tarde" },
+  { valor: "19:00", grupo: "Tarde" },
+  { valor: "19:30", grupo: "Tarde" },
+  { valor: "20:00", grupo: "Tarde" },
+];
+
+// Agrupa horários por período
+const HORARIOS_POR_GRUPO = HORARIOS.reduce((acc, h) => {
+  if (!acc[h.grupo]) acc[h.grupo] = [];
+  acc[h.grupo].push(h.valor);
+  return acc;
+}, {});
+
+// Labels dos grupos
+const LABEL_GRUPO = {
+  Manhã: "🌤️ Manhã (11h–12h)",
+  Tarde: "🌇 Tarde (16:30h–20h)",
+};
+
+// ============ COMPONENTE PRINCIPAL ============
+
 export default function CarrinhoModal({ aberto, fechar }) {
   const { itens, remover, alterarQtd, total, limpar } = useCarrinho();
   const numero = import.meta.env.VITE_WHATSAPP_NUMERO || "5527998036871";
 
   const [etapa, setEtapa] = useState("carrinho");
   const [tipoEntrega, setTipoEntrega] = useState("retirada");
+  const [dataEntrega, setDataEntrega] = useState("");
+  const [horaEntrega, setHoraEntrega] = useState("");
   const [enviando, setEnviando] = useState(false);
   const [cliente, setCliente] = useState({
-    nome: "",
-    telefone: "",
-    rua: "",
-    numero: "",
-    complemento: "",
-    bairro: "",
-    cidade: "",
-    referencia: "",
-    observacoes: "",
+    nome: "", telefone: "", rua: "", numero: "", complemento: "",
+    bairro: "", cidade: "Linhares", referencia: "", observacoes: "",
   });
   const [erros, setErros] = useState({});
+
+  // Taxa calculada em tempo real
+  const taxaEntrega =
+    tipoEntrega === "entrega" && cliente.bairro
+      ? (TAXAS_ENTREGA[cliente.bairro] ?? TAXA_PADRAO)
+      : 0;
+
+  const totalComTaxa = total + taxaEntrega;
+
+  // Data mínima = amanhã (24h de antecedência)
+  const dataMinima = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    return d.toISOString().split("T")[0];
+  })();
 
   const resetarFluxo = () => {
     setEtapa("carrinho");
     setTipoEntrega("retirada");
+    setDataEntrega("");
+    setHoraEntrega("");
     setCliente({
-      nome: "", telefone: "", rua: "", numero: "",
-      complemento: "", bairro: "", cidade: "", referencia: "", observacoes: "",
+      nome: "", telefone: "", rua: "", numero: "", complemento: "",
+      bairro: "", cidade: "Linhares", referencia: "", observacoes: "",
     });
     setErros({});
   };
@@ -65,6 +136,9 @@ export default function CarrinhoModal({ aberto, fechar }) {
     if (cliente.telefone.replace(/\D/g, "").length < 10)
       e.telefone = "Informe um telefone válido";
 
+    if (!dataEntrega) e.dataEntrega = "Escolha a data";
+    if (!horaEntrega) e.horaEntrega = "Escolha o horário";
+
     if (tipoEntrega === "entrega") {
       if (!cliente.rua.trim()) e.rua = "Informe a rua";
       if (!cliente.numero.trim()) e.numero = "Informe o número";
@@ -90,15 +164,15 @@ export default function CarrinhoModal({ aberto, fechar }) {
     // 🔹 1. Salvar venda no Firestore
     try {
       const custoTotal = itens.reduce(
-        (s, i) => s + (i.custo || 0) * i.quantidade,
-        0
+        (s, i) => s + (i.custo || 0) * i.quantidade, 0
       );
-      const lucro = total - custoTotal;
+      const lucro = totalComTaxa - custoTotal;
 
       await addDoc(collection(db, "vendas"), {
         cliente: cliente.nome,
         telefone: cliente.telefone,
         tipoEntrega,
+
         endereco:
           tipoEntrega === "entrega"
             ? {
@@ -110,11 +184,18 @@ export default function CarrinhoModal({ aberto, fechar }) {
                 referencia: cliente.referencia,
               }
             : null,
-        observacoes: cliente.observacoes,
-        itens,
-        total,
+
+        dataEntrega,
+        horaEntrega,
+
+        subtotal: total,
+        taxaEntrega,
+        total: totalComTaxa,
         custoTotal,
         lucro,
+
+        observacoes: cliente.observacoes,
+        itens,
         status: "pendente",
         origem: "site",
         data: serverTimestamp(),
@@ -137,6 +218,9 @@ export default function CarrinhoModal({ aberto, fechar }) {
     msg += "📦 *TIPO DE ENTREGA*\n";
     msg += tipoEntrega === "entrega" ? "🚚 *Entrega*\n" : "🏠 *Retirada no local*\n";
 
+    msg += `\n📅 *Data:* ${formatarDataBR(dataEntrega)}\n`;
+    msg += `🕐 *Hora:* ${horaEntrega}\n`;
+
     if (tipoEntrega === "entrega") {
       msg += "\n📍 *ENDEREÇO DE ENTREGA*\n";
       msg += `${cliente.rua}, ${cliente.numero}`;
@@ -158,7 +242,15 @@ export default function CarrinhoModal({ aberto, fechar }) {
     });
 
     msg += "\n━━━━━━━━━━━━━━━━━━━━\n";
-    msg += `💰 *TOTAL: R$ ${total.toFixed(2).replace(".", ",")}*\n`;
+    msg += `Subtotal: R$ ${total.toFixed(2).replace(".", ",")}\n`;
+
+    if (tipoEntrega === "entrega" && taxaEntrega > 0) {
+      msg += `🛵 Taxa de entrega (${cliente.bairro}): R$ ${taxaEntrega
+        .toFixed(2)
+        .replace(".", ",")}\n`;
+    }
+
+    msg += `💰 *TOTAL: R$ ${totalComTaxa.toFixed(2).replace(".", ",")}*\n`;
 
     if (cliente.observacoes) {
       msg += `\n📝 *Observações:*\n${cliente.observacoes}\n`;
@@ -178,9 +270,17 @@ export default function CarrinhoModal({ aberto, fechar }) {
     fecharModal();
   };
 
+  const formatarDataBR = (iso) => {
+    if (!iso) return "";
+    const [a, m, d] = iso.split("-");
+    return `${d}/${m}/${a}`;
+  };
+
+  const fmt = (v) => v.toFixed(2).replace(".", ",");
+
+  // ---------- RENDER ----------
   return (
     <>
-      {/* Backdrop */}
       {aberto && (
         <div
           onClick={fecharModal}
@@ -188,7 +288,6 @@ export default function CarrinhoModal({ aberto, fechar }) {
         />
       )}
 
-      {/* Drawer */}
       <div
         className={`fixed top-0 right-0 h-full w-full sm:w-[440px] bg-white shadow-2xl z-[70] transform transition-transform duration-300 flex flex-col ${
           aberto ? "translate-x-0" : "translate-x-full"
@@ -240,7 +339,7 @@ export default function CarrinhoModal({ aberto, fechar }) {
                           {i.nome}
                         </h4>
                         <p className="text-dourado font-bold text-sm">
-                          R$ {(i.preco * i.quantidade).toFixed(2).replace(".", ",")}
+                          R$ {fmt(i.preco * i.quantidade)}
                         </p>
                         <div className="flex items-center gap-2 mt-2">
                           <button
@@ -276,9 +375,7 @@ export default function CarrinhoModal({ aberto, fechar }) {
               <div className="p-5 bg-white border-t">
                 <div className="flex justify-between mb-4 text-lg">
                   <span className="font-medium text-marrom">Total:</span>
-                  <span className="font-bold text-dourado">
-                    R$ {total.toFixed(2).replace(".", ",")}
-                  </span>
+                  <span className="font-bold text-dourado">R$ {fmt(total)}</span>
                 </div>
                 <button
                   onClick={() => setEtapa("checkout")}
@@ -340,7 +437,78 @@ export default function CarrinhoModal({ aberto, fechar }) {
                 </div>
               </div>
 
-             {/* INFO DE RETIRADA COM MAPA */}
+              {/* DATA E HORA */}
+              <div>
+                <h3 className="font-titulo text-lg text-marrom mb-3">
+                  📅 Quando deseja receber?
+                </h3>
+                <div className="grid grid-cols-2 gap-3">
+                  {/* DATA */}
+                  <label className="block">
+                    <span className="text-sm font-medium text-gray-700">
+                      Data *
+                    </span>
+                    <input
+                      type="date"
+                      value={dataEntrega}
+                      min={dataMinima}
+                      onChange={(e) => {
+                        setDataEntrega(e.target.value);
+                        if (erros.dataEntrega)
+                          setErros((er) => ({ ...er, dataEntrega: null }));
+                      }}
+                      className={`w-full mt-1 px-3 py-2 border rounded-lg focus:ring-2 focus:ring-dourado outline-none text-sm ${
+                        erros.dataEntrega ? "border-red-400 bg-red-50" : ""
+                      }`}
+                    />
+                    {erros.dataEntrega && (
+                      <span className="text-xs text-red-500 mt-1 block">
+                        {erros.dataEntrega}
+                      </span>
+                    )}
+                  </label>
+
+                  {/* HORA */}
+                  <label className="block">
+                    <span className="text-sm font-medium text-gray-700">
+                      Hora *
+                    </span>
+                    <select
+                      value={horaEntrega}
+                      onChange={(e) => {
+                        setHoraEntrega(e.target.value);
+                        if (erros.horaEntrega)
+                          setErros((er) => ({ ...er, horaEntrega: null }));
+                      }}
+                      className={`w-full mt-1 px-3 py-2 border rounded-lg focus:ring-2 focus:ring-dourado outline-none text-sm ${
+                        erros.horaEntrega ? "border-red-400 bg-red-50" : ""
+                      }`}
+                    >
+                      <option value="">Selecione...</option>
+                      {Object.entries(HORARIOS_POR_GRUPO).map(([grupo, valores]) => (
+                        <optgroup key={grupo} label={LABEL_GRUPO[grupo] || grupo}>
+                          {valores.map((v) => (
+                            <option key={v} value={v}>
+                              {v}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </select>
+                    {erros.horaEntrega && (
+                      <span className="text-xs text-red-500 mt-1 block">
+                        {erros.horaEntrega}
+                      </span>
+                    )}
+                  </label>
+                </div>
+                <p className="text-xs text-gray-400 mt-2">
+                  ⏱️ Atendemos apenas: <strong>11h–12h</strong> e{" "}
+                  <strong>16:30h–20h</strong> • Antecedência mínima de 24h
+                </p>
+              </div>
+
+              {/* INFO DE RETIRADA COM MAPA */}
               {tipoEntrega === "retirada" && (
                 <div className="bg-green-50 border border-green-200 rounded-xl p-4 animate-fade-in">
                   <h4 className="font-medium text-green-800 text-sm flex items-center gap-2 mb-1">
@@ -349,10 +517,11 @@ export default function CarrinhoModal({ aberto, fechar }) {
                   <p className="text-sm text-green-700 mb-3">
                     Av. Guerino Gilbert, 446 — Ap 101
                     <br />
-                    <span className="text-xs">(encima do Marobar) — Linhares/ES</span>
+                    <span className="text-xs">
+                      (encima do Marobar) — Linhares/ES
+                    </span>
                   </p>
 
-                  {/* Mapa embutido */}
                   <div className="rounded-lg overflow-hidden border border-green-200 mb-3">
                     <iframe
                       title="Local de retirada — Bolos Caseiros Sabrina"
@@ -411,21 +580,55 @@ export default function CarrinhoModal({ aberto, fechar }) {
                   />
 
                   <div className="grid grid-cols-2 gap-2">
-                    <Campo
-                      label="Bairro *"
-                      value={cliente.bairro}
-                      onChange={(v) => setCampo("bairro", v)}
-                      erro={erros.bairro}
-                      placeholder="Centro"
-                    />
+                    <label className="block">
+                      <span className="text-sm font-medium text-gray-700">
+                        Bairro *
+                      </span>
+                      <select
+                        value={cliente.bairro}
+                        onChange={(e) => setCampo("bairro", e.target.value)}
+                        className={`w-full mt-1 px-3 py-2 border rounded-lg focus:ring-2 focus:ring-dourado outline-none text-sm ${
+                          erros.bairro ? "border-red-400 bg-red-50" : ""
+                        }`}
+                      >
+                        <option value="">Selecione...</option>
+                        {Object.keys(TAXAS_ENTREGA).map((b) => (
+                          <option key={b} value={b}>
+                            {b} — R$ {fmt(TAXAS_ENTREGA[b])}
+                          </option>
+                        ))}
+                        <option value="Outro">
+                          Outro — R$ {fmt(TAXA_PADRAO)}
+                        </option>
+                      </select>
+                      {erros.bairro && (
+                        <span className="text-xs text-red-500 mt-1 block">
+                          {erros.bairro}
+                        </span>
+                      )}
+                    </label>
+
                     <Campo
                       label="Cidade *"
                       value={cliente.cidade}
                       onChange={(v) => setCampo("cidade", v)}
                       erro={erros.cidade}
-                      placeholder="Vitória"
+                      placeholder="Linhares"
                     />
                   </div>
+
+                  {cliente.bairro && (
+                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-2 animate-fade-in">
+                      <div className="flex justify-between text-sm">
+                        <span className="text-yellow-800">
+                          🛵 Taxa de entrega ({cliente.bairro}):
+                        </span>
+                        <span className="font-bold text-yellow-900">
+                          R$ {fmt(taxaEntrega)}
+                        </span>
+                      </div>
+                    </div>
+                  )}
 
                   <Campo
                     label="Ponto de referência"
@@ -463,17 +666,28 @@ export default function CarrinhoModal({ aberto, fechar }) {
                       <span>
                         {i.quantidade}x {i.nome}
                       </span>
-                      <span>
-                        R$ {(i.preco * i.quantidade).toFixed(2).replace(".", ",")}
-                      </span>
+                      <span>R$ {fmt(i.preco * i.quantidade)}</span>
                     </li>
                   ))}
                 </ul>
-                <div className="flex justify-between font-bold text-marrom pt-2 border-t border-dourado/30">
-                  <span>Total</span>
-                  <span className="text-dourado">
-                    R$ {total.toFixed(2).replace(".", ",")}
-                  </span>
+
+                <div className="border-t border-dourado/30 pt-2 space-y-1 text-sm">
+                  <div className="flex justify-between text-gray-600">
+                    <span>Subtotal</span>
+                    <span>R$ {fmt(total)}</span>
+                  </div>
+
+                  {tipoEntrega === "entrega" && (
+                    <div className="flex justify-between text-yellow-700">
+                      <span>🛵 Taxa de entrega</span>
+                      <span>R$ {fmt(taxaEntrega)}</span>
+                    </div>
+                  )}
+
+                  <div className="flex justify-between font-bold text-marrom pt-2 border-t border-dourado/30">
+                    <span>Total</span>
+                    <span className="text-dourado">R$ {fmt(totalComTaxa)}</span>
+                  </div>
                 </div>
               </div>
             </div>
