@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { collection, getDocs, query, orderBy } from "firebase/firestore";
+import { motion } from "framer-motion";
 import { db } from "../firebase/config";
 import ProdutoCard from "./ProdutoCard";
+import { staggerContainer } from "../utils/animacoes";
 
 const produtosExemplo = [
   {
@@ -9,7 +11,7 @@ const produtosExemplo = [
     nome: "Bolo de Milho Verde",
     descricao: "Bolo caseiro de milho verde cremoso, feito no ponto perfeito.",
     preco: 25.0,
-    imagem: "/bolos/milho.jpg",
+    imagem: "/bolos/milho.png",
     ativo: true,
     ordem: 1,
   },
@@ -18,7 +20,7 @@ const produtosExemplo = [
     nome: "Bolo de Banana Caramelizada",
     descricao: "Banana caramelizada com cobertura cremosa. Uma delícia!",
     preco: 28.0,
-    imagem: "/bolos/banana.jpg",
+    imagem: "/bolos/banana.png",
     ativo: true,
     ordem: 2,
   },
@@ -27,7 +29,7 @@ const produtosExemplo = [
     nome: "Bolo de Cenoura com Chocolate",
     descricao: "Clássico bolo de cenoura com generosa cobertura de chocolate.",
     preco: 30.0,
-    imagem: "/bolos/cenoura.jpg",
+    imagem: "/bolos/cenoura.png",
     ativo: true,
     ordem: 3,
   },
@@ -59,9 +61,15 @@ export default function Produtos() {
   }, []);
 
   return (
-    <section id="produtos" className="py-16 md:py-24 px-4 bg-creme">
+    <section id="produtos" className="py-16 md:py-24 px-4 bg-creme overflow-hidden">
       <div className="max-w-7xl mx-auto">
-        <div className="text-center mb-12">
+        <motion.div
+          initial={{ opacity: 0, y: 30 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true }}
+          transition={{ duration: 0.7 }}
+          className="text-center mb-12"
+        >
           <h2 className="font-titulo text-3xl md:text-5xl text-marrom mb-3">
             Nosso Cardápio
           </h2>
@@ -69,7 +77,7 @@ export default function Produtos() {
           <p className="text-marromClaro max-w-2xl mx-auto">
             Encomende pelo WhatsApp para <strong>retirada ou entrega</strong>!
           </p>
-        </div>
+        </motion.div>
 
         {loading ? (
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -78,11 +86,17 @@ export default function Produtos() {
             ))}
           </div>
         ) : (
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8">
+          <motion.div
+            variants={staggerContainer}
+            initial="hidden"
+            whileInView="visible"
+            viewport={{ once: true, amount: 0.1 }}
+            className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8"
+          >
             {produtos.map((p) => (
               <ProdutoCard key={p.id} produto={p} />
             ))}
-          </div>
+          </motion.div>
         )}
       </div>
     </section>
